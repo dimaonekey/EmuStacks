@@ -325,8 +325,6 @@ jobs:
           #include "imgui_impl_win32.h"
           #include "imgui_impl_dx11.h"
 
-          namespace imgui = ImGui;
-
           extern "C" {
               #include <lua.h>
               #include <lualib.h>
@@ -805,7 +803,7 @@ jobs:
       - name: Fetch and Debloat ADB
         shell: pwsh
         run: |
-          Invoke-WebRequest -Uri "https://dl.google.com/android/repository/platform-tools-latest-windows.zip" -OutFile "adb.zip"
+          curl.exe -L -o "adb.zip" "https://dl.google.com/android/repository/platform-tools-latest-windows.zip"
           Expand-Archive -Path "adb.zip" -DestinationPath "temp_adb"
           Copy-Item "temp_adb/platform-tools/adb.exe" "bundle/tools/"
           Copy-Item "temp_adb/platform-tools/AdbWinApi.dll" "bundle/tools/"
@@ -816,8 +814,7 @@ jobs:
       - name: Fetch Android OS Image
         shell: pwsh
         run: |
-          $osUrl = "https://master.dl.sourceforge.net/project/android-x86/Release%209.0/android-x86_64-9.0-r2.iso?viasf=1"
-          Invoke-WebRequest -Uri $osUrl -OutFile "bundle/android_root.img"
+          curl.exe -L --retry 3 --retry-delay 2 -o "bundle/android_root.img" "https://downloads.sourceforge.net/project/android-x86/Release%209.0/android-x86_64-9.0-r2.iso"
 
       - name: Generate Runtime Launcher (run.bat) & Finalize
         shell: pwsh
