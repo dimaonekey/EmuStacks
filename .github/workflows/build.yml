@@ -182,7 +182,7 @@ jobs:
 
       - run: vcpkg install lua:x64-windows-static
 
-      - name: Generate Host Engine & CMake
+      - name: Generate Host Overlay Engine & CMake
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path "host"
@@ -235,8 +235,7 @@ jobs:
           static IDXGISwapChain*          g_pSwapChain = nullptr;
           static ID3D11RenderTargetView*  g_mainRenderTargetView = nullptr;
           static HWND                     g_hMainWnd = nullptr;
-          static HWND                     g_hViewportWnd = nullptr;
-          static HWND                     g_hHijackedWnd = nullptr;
+          static HWND                     g_hTargetGameWnd = nullptr;
           static SOCKET                   g_BridgeSock = INVALID_SOCKET;
 
           static lua_State*               g_Lua = nullptr;
@@ -267,10 +266,14 @@ jobs:
           static int lua_host_toggle_fps(lua_State* L) {
               bool aim = lua_toboolean(L, 1);
               g_FpsAimMode = aim;
-              if (aim) {
-                  RECT rc; GetWindowRect(g_hViewportWnd, &rc); ClipCursor(&rc); ShowCursor(FALSE);
+              if (aim && g_hTargetGameWnd) {
+                  RECT rc; GetWindowRect(g_hTargetGameWnd, &rc);
+                  rc.right -= 260; // Исключаем сайдбар
+                  ClipCursor(&rc);
+                  ShowCursor(FALSE);
               } else {
-                  ClipCursor(nullptr); ShowCursor(TRUE);
+                  ClipCursor(nullptr);
+                  ShowCursor(TRUE);
               }
               return 0;
           }
@@ -417,28 +420,30 @@ jobs:
               lua_setglobal(L, "imgui");
           }
 
-          static BOOL CALLBACK EnumHijackProc(HWND hwnd, LPARAM) {
+          static BOOL CALLBACK EnumTargetGameProc(HWND hwnd, LPARAM) {
               char title[128]; GetWindowTextA(hwnd, title, sizeof(title));
-              if ((strstr(title, "BlueStacks") || strstr(title, "LDPlayer") || strstr(title, "QEMU")) && IsWindowVisible(hwnd) && hwnd != g_hMainWnd) {
-                  g_hHijackedWnd = hwnd;
+              char cls[128]; GetClassNameA(hwnd, cls, sizeof(cls));
+              if ((strstr(title, "BlueStacks") || strstr(cls, "BlueStacksApp") || strstr(title, "LDPlayer") || strstr(title, "QEMU")) && IsWindowVisible(hwnd) && hwnd != g_hMainWnd) {
+                  g_hTargetGameWnd = hwnd;
                   return FALSE;
               }
               return TRUE;
           }
 
-          static void HijackThread() {
-              while (g_Running && !g_hHijackedWnd) {
-                  EnumWindows(EnumHijackProc, 0);
-                  Sleep(500);
-              }
-              if (g_hHijackedWnd && g_hViewportWnd) {
-                  LONG_PTR st = GetWindowLongPtr(g_hHijackedWnd, GWL_STYLE);
-                  st &= ~(WS_POPUP | WS_CAPTION | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU);
-                  st |= (WS_CHILD | WS_VISIBLE);
-                  SetWindowLongPtr(g_hHijackedWnd, GWL_STYLE, st);
-                  SetParent(g_hHijackedWnd, g_hViewportWnd);
-                  RECT rc; GetClientRect(g_hViewportWnd, &rc);
-                  MoveWindow(g_hHijackedWnd, 0, 0, rc.right, rc.bottom, TRUE);
+          static void TrackTargetWindowThread() {
+              while (g_Running) {
+                  if (!g_hTargetGameWnd || !IsWindow(g_hTargetGameWnd)) {
+                      g_hTargetGameWnd = nullptr;
+                      EnumWindows(EnumTargetGameProc, 0);
+                  } else {
+                      RECT rc;
+                      if (GetWindowRect(g_hTargetGameWnd, &rc)) {
+                          int w = rc.right - rc.left;
+                          int h = rc.bottom - rc.top;
+                          SetWindowPos(g_hMainWnd, HWND_TOPMOST, rc.left, rc.top, w, h, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+                      }
+                  }
+                  Sleep(16);
               }
           }
 
@@ -467,17 +472,20 @@ jobs:
                       g_pSwapChain->ResizeBuffers(0, LOWORD(lParam), HIWORD(lParam), DXGI_FORMAT_UNKNOWN, 0);
                       ID3D11Texture2D* b = nullptr; g_pSwapChain->GetBuffer(0, IID_PPV_ARGS(&b));
                       g_pd3dDevice->CreateRenderTargetView(b, nullptr, &g_mainRenderTargetView); b->Release();
-                      if (g_hViewportWnd) {
-                          MoveWindow(g_hViewportWnd, 0, 0, LOWORD(lParam) - 260, HIWORD(lParam), TRUE);
-                          if (g_hHijackedWnd) MoveWindow(g_hHijackedWnd, 0, 0, LOWORD(lParam) - 260, HIWORD(lParam), TRUE);
-                      }
                   }
                   return 0;
               case WM_KEYDOWN:
                   if (wParam == VK_F10) {
                       g_FpsAimMode = !g_FpsAimMode;
-                      if (g_FpsAimMode) { RECT rc; GetWindowRect(g_hViewportWnd, &rc); ClipCursor(&rc); ShowCursor(FALSE); }
-                      else { ClipCursor(nullptr); ShowCursor(TRUE); }
+                      if (g_FpsAimMode && g_hTargetGameWnd) {
+                          RECT rc; GetWindowRect(g_hTargetGameWnd, &rc);
+                          rc.right -= 260;
+                          ClipCursor(&rc);
+                          ShowCursor(FALSE);
+                      } else {
+                          ClipCursor(nullptr);
+                          ShowCursor(TRUE);
+                      }
                       return 0;
                   }
                   return 0;
@@ -492,21 +500,27 @@ jobs:
           int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int nCmdShow) {
               WSADATA wsa; WSAStartup(MAKEWORD(2, 2), &wsa);
 
-              WNDCLASSEXA wc = { sizeof(wc), CS_CLASSDC, MainWndProc, 0, 0, hInst, nullptr, nullptr, nullptr, nullptr, "EmuStacksMain", nullptr };
+              // Создаем окно как прозрачный полноэкранный HUD оверлей
+              WNDCLASSEXA wc = { sizeof(wc), CS_CLASSDC, MainWndProc, 0, 0, hInst, nullptr, nullptr, nullptr, nullptr, "EmuStacksOverlay", nullptr };
               RegisterClassExA(&wc);
-              g_hMainWnd = CreateWindowA("EmuStacksMain", "EmuStacks // MIMGUI RUNTIME", WS_OVERLAPPEDWINDOW, 100, 100, 1280, 720, nullptr, nullptr, hInst, nullptr);
+              g_hMainWnd = CreateWindowExA(
+                  WS_EX_TOPMOST | WS_EX_LAYERED,
+                  "EmuStacksOverlay", "EmuStacks // MIMGUI OVERLAY",
+                  WS_POPUP, 100, 100, 1280, 720, nullptr, nullptr, hInst, nullptr
+              );
 
-              BOOL dark = TRUE;
-              DwmSetWindowAttribute(g_hMainWnd, 20, &dark, sizeof(dark));
-
-              WNDCLASSEXA wcv = { sizeof(wcv), CS_CLASSDC, DefWindowProcA, 0, 0, hInst, nullptr, nullptr, nullptr, nullptr, "EmuStacksViewport", nullptr };
-              RegisterClassExA(&wcv);
-              g_hViewportWnd = CreateWindowA("EmuStacksViewport", nullptr, WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN, 0, 0, 1020, 720, g_hMainWnd, nullptr, hInst, nullptr);
+              SetLayeredWindowAttributes(g_hMainWnd, 0, 255, LWA_ALPHA);
+              MARGINS margins = { -1 };
+              DwmExtendFrameIntoClientArea(g_hMainWnd, &margins);
 
               DXGI_SWAP_CHAIN_DESC sd{};
-              sd.BufferCount = 2; sd.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-              sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT; sd.OutputWindow = g_hMainWnd;
-              sd.SampleDesc.Count = 1; sd.Windowed = TRUE; sd.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
+              sd.BufferCount = 2;
+              sd.BufferDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+              sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+              sd.OutputWindow = g_hMainWnd;
+              sd.SampleDesc.Count = 1;
+              sd.Windowed = TRUE;
+              sd.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
 
               D3D_FEATURE_LEVEL fl = D3D_FEATURE_LEVEL_11_0;
               D3D11CreateDeviceAndSwapChain(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, 0, &fl, 1, D3D11_SDK_VERSION, &sd, &g_pSwapChain, &g_pd3dDevice, nullptr, &g_pd3dDeviceContext);
@@ -542,7 +556,7 @@ jobs:
                   lua_pop(g_Lua, 1);
               }
 
-              std::thread(HijackThread).detach();
+              std::thread(TrackTargetWindowThread).detach();
               std::thread(BridgeThread).detach();
 
               MSG msg{};
@@ -570,9 +584,10 @@ jobs:
                   }
 
                   ImGui::Render();
-                  const float clear[4] = { 0.08f, 0.08f, 0.09f, 1.0f };
+                  // Фон полностью прозрачный: сквозь него видно BlueStacks
+                  const float clear_transparent[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
                   g_pd3dDeviceContext->OMSetRenderTargets(1, &g_mainRenderTargetView, nullptr);
-                  g_pd3dDeviceContext->ClearRenderTargetView(g_mainRenderTargetView, clear);
+                  g_pd3dDeviceContext->ClearRenderTargetView(g_mainRenderTargetView, clear_transparent);
                   ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
                   g_pSwapChain->Present(1, 0);
               }
