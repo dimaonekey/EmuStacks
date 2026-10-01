@@ -188,7 +188,6 @@ jobs:
           New-Item -ItemType Directory -Force -Path "host"
           New-Item -ItemType Directory -Force -Path "scripts"
 
-          # 1. Скрипт интерфейса чисто на LUA (mimgui dark-gray style)
           Set-Content -Path "scripts/interface.lua" -Value @'
           local ui = {}
 
@@ -310,7 +309,6 @@ jobs:
           return ui
           '@ -Encoding UTF8
 
-          # 2. C++ Host Bridge (Win32, DirectX 11, Fonts Loader, ImGui-to-Lua Bridge)
           Set-Content -Path "host/emustacks_host.cpp" -Value @'
           #define WIN32_LEAN_AND_MEAN
           #include <windows.h>
@@ -326,6 +324,8 @@ jobs:
           #include "imgui.h"
           #include "imgui_impl_win32.h"
           #include "imgui_impl_dx11.h"
+
+          namespace imgui = ImGui;
 
           extern "C" {
               #include <lua.h>
@@ -421,42 +421,47 @@ jobs:
               return 0;
           }
 
-          static int lua_imgui_begin(lua_State* L) {
-              const char* name = luaL_checkstring(L, 1);
-              int flags = (int)luaL_optinteger(L, 2, 0);
-              imgui::Begin(name, nullptr, flags | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove);
+          static int lua_imgui_style_colors_dark(lua_State*) {
+              ImGui::StyleColorsDark();
               return 0;
           }
 
-          static int lua_imgui_end(lua_State* L) { imgui::End(); return 0; }
+          static int lua_imgui_begin(lua_State* L) {
+              const char* name = luaL_checkstring(L, 1);
+              int flags = (int)luaL_optinteger(L, 2, 0);
+              ImGui::Begin(name, nullptr, flags | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove);
+              return 0;
+          }
+
+          static int lua_imgui_end(lua_State*) { ImGui::End(); return 0; }
           static int lua_imgui_set_pos(lua_State* L) {
-              imgui::SetNextWindowPos(ImVec2((float)luaL_checknumber(L, 1), (float)luaL_checknumber(L, 2)));
+              ImGui::SetNextWindowPos(ImVec2((float)luaL_checknumber(L, 1), (float)luaL_checknumber(L, 2)));
               return 0;
           }
           static int lua_imgui_set_size(lua_State* L) {
-              imgui::SetNextWindowSize(ImVec2((float)luaL_checknumber(L, 1), (float)luaL_checknumber(L, 2)));
+              ImGui::SetNextWindowSize(ImVec2((float)luaL_checknumber(L, 1), (float)luaL_checknumber(L, 2)));
               return 0;
           }
-          static int lua_imgui_text(lua_State* L) { imgui::TextUnformatted(luaL_checkstring(L, 1)); return 0; }
+          static int lua_imgui_text(lua_State* L) { ImGui::TextUnformatted(luaL_checkstring(L, 1)); return 0; }
           static int lua_imgui_text_colored(lua_State* L) {
               const char* txt = luaL_checkstring(L, 1);
               float r = (float)luaL_checknumber(L, 2), g = (float)luaL_checknumber(L, 3), b = (float)luaL_checknumber(L, 4), a = (float)luaL_optnumber(L, 5, 1.0);
-              imgui::TextColored(ImVec4(r, g, b, a), "%s", txt);
+              ImGui::TextColored(ImVec4(r, g, b, a), "%s", txt);
               return 0;
           }
-          static int lua_imgui_text_disabled(lua_State* L) { imgui::TextDisabled("%s", luaL_checkstring(L, 1)); return 0; }
-          static int lua_imgui_separator(lua_State* L) { imgui::Separator(); return 0; }
-          static int lua_imgui_spacing(lua_State* L) { imgui::Spacing(); return 0; }
+          static int lua_imgui_text_disabled(lua_State* L) { ImGui::TextDisabled("%s", luaL_checkstring(L, 1)); return 0; }
+          static int lua_imgui_separator(lua_State*) { ImGui::Separator(); return 0; }
+          static int lua_imgui_spacing(lua_State*) { ImGui::Spacing(); return 0; }
           static int lua_imgui_button(lua_State* L) {
               const char* lbl = luaL_checkstring(L, 1);
               float w = (float)luaL_optnumber(L, 2, 0.0), h = (float)luaL_optnumber(L, 3, 0.0);
-              lua_pushboolean(L, imgui::Button(lbl, ImVec2(w, h)));
+              lua_pushboolean(L, ImGui::Button(lbl, ImVec2(w, h)));
               return 1;
           }
           static int lua_imgui_checkbox(lua_State* L) {
               const char* lbl = luaL_checkstring(L, 1);
               bool val = lua_toboolean(L, 2);
-              bool changed = imgui::Checkbox(lbl, &val);
+              bool changed = ImGui::Checkbox(lbl, &val);
               lua_pushboolean(L, changed);
               lua_pushboolean(L, val);
               return 2;
@@ -466,7 +471,7 @@ jobs:
               float val = (float)luaL_checknumber(L, 2);
               float min = (float)luaL_checknumber(L, 3);
               float max = (float)luaL_checknumber(L, 4);
-              bool changed = imgui::SliderFloat(lbl, &val, min, max, "%.1fx");
+              bool changed = ImGui::SliderFloat(lbl, &val, min, max, "%.1fx");
               lua_pushboolean(L, changed);
               lua_pushnumber(L, val);
               return 2;
@@ -474,23 +479,23 @@ jobs:
           static int lua_imgui_set_color(lua_State* L) {
               int idx = (int)luaL_checkinteger(L, 1);
               float r = (float)luaL_checknumber(L, 2), g = (float)luaL_checknumber(L, 3), b = (float)luaL_checknumber(L, 4), a = (float)luaL_checknumber(L, 5);
-              if (idx >= 0 && idx < ImGuiCol_COUNT) imgui::GetStyle().Colors[idx] = ImVec4(r, g, b, a);
+              if (idx >= 0 && idx < ImGuiCol_COUNT) ImGui::GetStyle().Colors[idx] = ImVec4(r, g, b, a);
               return 0;
           }
           static int lua_imgui_push_font(lua_State* L) {
               int f = (int)luaL_checkinteger(L, 1);
-              if (f == 0 && g_FontTahoma) imgui::PushFont(g_FontTahoma);
-              else if (f == 1 && g_FontTrebuchet) imgui::PushFont(g_FontTrebuchet);
+              if (f == 0 && g_FontTahoma) ImGui::PushFont(g_FontTahoma);
+              else if (f == 1 && g_FontTrebuchet) ImGui::PushFont(g_FontTrebuchet);
               return 0;
           }
-          static int lua_imgui_pop_font(lua_State* L) { imgui::PopFont(); return 0; }
+          static int lua_imgui_pop_font(lua_State*) { ImGui::PopFont(); return 0; }
           static int lua_imgui_draw_badge(lua_State* L) {
               const char* lbl = luaL_checkstring(L, 1);
               float px = (float)luaL_checknumber(L, 2), py = (float)luaL_checknumber(L, 3);
-              ImDrawList* draw = imgui::GetBackgroundDrawList();
+              ImDrawList* draw = ImGui::GetBackgroundDrawList();
               draw->AddCircleFilled(ImVec2(px, py), 18.0f, IM_COL32(30, 30, 34, 200));
               draw->AddCircle(ImVec2(px, py), 18.0f, IM_COL32(110, 110, 120, 240), 16, 2.0f);
-              ImVec2 ts = imgui::CalcTextSize(lbl);
+              ImVec2 ts = ImGui::CalcTextSize(lbl);
               draw->AddText(ImVec2(px - ts.x * 0.5f, py - ts.y * 0.5f), IM_COL32(230, 230, 235, 255), lbl);
               return 0;
           }
@@ -505,6 +510,7 @@ jobs:
               lua_setglobal(L, "host");
 
               lua_newtable(L);
+              lua_pushcfunction(L, lua_imgui_style_colors_dark); lua_setfield(L, -2, "StyleColorsDark");
               lua_pushcfunction(L, lua_imgui_begin); lua_setfield(L, -2, "Begin");
               lua_pushcfunction(L, lua_imgui_end); lua_setfield(L, -2, "End");
               lua_pushcfunction(L, lua_imgui_set_pos); lua_setfield(L, -2, "SetNextWindowPos");
@@ -561,8 +567,11 @@ jobs:
           }
 
           static void BridgeThread() {
-              sockaddr_in a{AF_INET, htons(8888)};
+              sockaddr_in a{};
+              a.sin_family = AF_INET;
+              a.sin_port = htons(8888);
               inet_pton(AF_INET, "127.0.0.1", &a.sin_addr);
+
               while (g_Running) {
                   SOCKET s = socket(AF_INET, SOCK_STREAM, 0);
                   int opt = 1; setsockopt(s, IPPROTO_TCP, TCP_NODELAY, (const char*)&opt, sizeof(opt));
@@ -634,9 +643,9 @@ jobs:
               UpdateWindow(g_hMainWnd);
 
               IMGUI_CHECKVERSION();
-              imgui::CreateContext();
+              ImGui::CreateContext();
 
-              ImGuiIO& io = imgui::GetIO();
+              ImGuiIO& io = ImGui::GetIO();
               g_FontTahoma = io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\tahoma.ttf", 15.0f);
               g_FontTrebuchet = io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\trebuc.ttf", 18.0f);
               if (!g_FontTahoma) g_FontTahoma = io.Fonts->AddFontDefault();
@@ -652,7 +661,7 @@ jobs:
               if (luaL_dofile(g_Lua, "scripts/interface.lua") == LUA_OK) {
                   lua_setglobal(g_Lua, "UIModule");
                   lua_getglobal(g_Lua, "UIModule");
-                  lua_getfield(L, -1, "apply_palette");
+                  lua_getfield(g_Lua, -1, "apply_palette");
                   lua_pcall(g_Lua, 0, 0, 0);
                   lua_pop(g_Lua, 1);
               }
@@ -667,7 +676,7 @@ jobs:
                   }
                   ImGui_ImplDX11_NewFrame();
                   ImGui_ImplWin32_NewFrame();
-                  imgui::NewFrame();
+                  ImGui::NewFrame();
 
                   RECT cr; GetClientRect(g_hMainWnd, &cr);
                   float w = (float)(cr.right - cr.left), h = (float)(cr.bottom - cr.top);
@@ -684,11 +693,11 @@ jobs:
                       }
                   }
 
-                  imgui::Render();
+                  ImGui::Render();
                   const float clear[4] = { 0.08f, 0.08f, 0.09f, 1.0f };
                   g_pd3dDeviceContext->OMSetRenderTargets(1, &g_mainRenderTargetView, nullptr);
                   g_pd3dDeviceContext->ClearRenderTargetView(g_mainRenderTargetView, clear);
-                  ImGui_ImplDX11_RenderDrawData(imgui::GetDrawData());
+                  ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
                   g_pSwapChain->Present(1, 0);
               }
 
@@ -698,7 +707,6 @@ jobs:
           }
           '@ -Encoding UTF8
 
-          # 3. CMakeLists.txt с автоматической подкачкой ImGui через FetchContent
           Set-Content -Path "host/CMakeLists.txt" -Value @'
           cmake_minimum_required(VERSION 3.20)
           project(emustacks CXX)
